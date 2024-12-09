@@ -1,8 +1,10 @@
+import os
 from tkinter import ttk
 from tkinter import *
+from tkinter.messagebox import *
 import webbrowser
 import sqlite3
-
+import hashlib
 
 class ModManagerApp:
     def __init__(self):
@@ -14,7 +16,7 @@ class ModManagerApp:
         self.__root = Tk()
         self.__root.title("PAYDAY 3 Mod Manager")
         self.__root.config(background="#FFFFFF")
-        self.__root.geometry("1187x600")
+        self.__root.geometry("1480x600")
         self.__root.resizable(False, False)
         self.__root.iconbitmap("pd3.ico")
 
@@ -45,8 +47,8 @@ class ModManagerApp:
         frame_modlist = Frame(self.__root, background="#FFFFFF", width=900)
         frame_properties = Frame(self.__root, background="#D9D9D9", width=300)
 
-        # Create the mod list
-        self.__mods = ttk.Treeview(frame_modlist, columns=("id", "displayname", "filename", "directory", "status"), show="headings", height=25)
+        # Create the mod list and selector
+        self.__mods = ttk.Treeview(frame_modlist, columns=("id", "displayname", "filename", "directory", "category", "status"), show="headings", height=25)
         self.__mods.column("#1", anchor="w", width=35)
         self.__mods.heading("#1", text="ID")
         self.__mods.column("#2", anchor="w", width=325)
@@ -55,9 +57,20 @@ class ModManagerApp:
         self.__mods.heading("#3", text="File name")
         self.__mods.column("#4", anchor="w", width=150)
         self.__mods.heading("#4", text="Location")
-        self.__mods.column("#5", anchor="w", width=100)
-        self.__mods.heading("#5", text="Status")
+        self.__mods.column("#5", anchor="w", width=150)
+        self.__mods.heading("#5", text="Category")
+        self.__mods.column("#6", anchor="w", width=100)
+        self.__mods.heading("#6", text="Status")
         self.__mods.pack(side=TOP, fill=BOTH, expand=True)
+
+        frame_selector = Frame(frame_modlist, background="#FFFFFF")
+        Label(frame_selector, text="Mod ID: ", font=("Arial", 12), background="#FFFFFF").pack(side=LEFT)
+        self.__var_mod_id = StringVar()
+        entry_selector = Entry(frame_selector, textvariable=self.__var_mod_id)
+        entry_selector.pack(side=LEFT)
+        button_search = Button(frame_selector, text="OK", font=("Arial", 10), command=self.__select_mod)
+        button_search.pack(side=LEFT)
+        frame_selector.pack(side=TOP, fill=X, expand=True)
 
         # Create the text variables as class elements for properties frame
         self.__mod_display_name = StringVar()
@@ -65,14 +78,18 @@ class ModManagerApp:
         self.__mod_location = StringVar()
         self.__mod_category = StringVar()
 
-        self.__mod_display_name.set("DISPLAY_NAME")
-        self.__mod_file_name.set("FILE_NAME")
-        self.__mod_location.set("Location: MOD_LOCATION")
-        self.__mod_category.set("Category: MOD_CATEGORY")
+        self.__mod_display_name.set("")
+        self.__mod_file_name.set("Please select a mod from the list")
+        self.__mod_location.set("")
+        self.__mod_category.set("")
 
         # Create the UI elements for the properties frame
-        label_display_name = Label(frame_properties, textvariable=self.__mod_display_name, font=("Arial", 24), background="#D9D9D9", justify="left")
-        label_file_name = Label(frame_properties, textvariable=self.__mod_file_name, font=("Arial", 16), background="#D9D9D9", justify="left")
+        image = PhotoImage(file="pd3_banner.png")
+        image_label = Label(frame_properties, image=image, background="#D9D9D9")
+        image_label.image = image
+        image_label.pack(side=TOP, fill=BOTH, expand=True)
+        label_display_name = Label(frame_properties, textvariable=self.__mod_display_name, font=("Arial", 18), background="#D9D9D9", justify="left")
+        label_file_name = Label(frame_properties, textvariable=self.__mod_file_name, font=("Arial", 12), background="#D9D9D9", justify="left")
         label_location = Label(frame_properties, textvariable=self.__mod_location, font=("Arial", 12), background="#D9D9D9", justify="left")
         label_category = Label(frame_properties, textvariable=self.__mod_category, font=("Arial", 12), background="#D9D9D9", justify="left")
         self.__button_rename = Button(frame_properties, text="Rename", font=("Arial", 20), background="#1E1E1E", foreground="#FFFFFF", activebackground="#2E2E2E", activeforeground="#FFFFFF")
@@ -95,12 +112,16 @@ class ModManagerApp:
         frame_modlist.pack(side=LEFT, fill="x")
         frame_properties.pack(side=LEFT, fill="y")
 
+        # Set miscellaneous variables
+        self.__selected_mod_id = None
+        self.__mods_directory = "C:\\Program Files (x86)\\Steam\\steamapps\\common\\PAYDAY3\\PAYDAY3\\Content\\Paks\\~mods"
+
     def launch(self):
         self.__displayMods()
         self.__root.mainloop()
 
     def __displayMods(self):
-        self.__cursor.execute("SELECT id, displayname, filename, directory FROM mods;")
+        self.__cursor.execute("SELECT id, displayname, filename, directory, category FROM mods;")
         rows = self.__cursor.fetchall()
 
         for row in rows:
@@ -116,8 +137,57 @@ class ModManagerApp:
     def __open_mws(self):
         webbrowser.open("https://modworkshop.net/user/cipherprotogen") # TODO: Change to Modworkshop page of the tool
 
-    def scanModFolder(self):
-        pass
+    def __select_mod(self):
+        try:
+            mod_id = int(self.__var_mod_id.get())
+            self.__cursor.execute("SELECT displayname, filename, directory, category FROM mods WHERE id = ?", (mod_id,))
+            mod_data = self.__cursor.fetchone()
+            if mod_data:
+                self.__selected_mod_id = mod_id
+                self.__mod_display_name.set(mod_data[0])
+                self.__mod_file_name.set(mod_data[1])
+                self.__mod_location.set(f"Location: {mod_data[2].split("Paks\\")[1]}")
+                self.__mod_category.set(f"Category: {mod_data[3]}")
+            else:
+                showerror("ERROR", f"No mod is matching the ID {mod_id} !")
+        except ValueError:
+            showerror("ERROR", f"'{self.__var_mod_id.get()}' is not a valid mod ID!")
+
+    def __rescan_folder(self):
+        # Scan mod files
+        files = os.walk(self.__mods_directory)
+        list = []
+
+        for loc in files:
+            if ".git" in loc[0]:
+                continue
+
+            for file in loc[2]:
+                if file.endswith(".pak") or file.endswith(".pak.disabled"):
+                    list.append((loc[0], file))
+
+        # Update local database with new mods
+        for file in list:
+            with open(os.path.join(file[0], file[1]), "rb") as f:
+                file_hash = hashlib.md5(f.read()).hexdigest()
+            display_name = file[1].split(".pak")[0]
+
+            self.__cursor.execute(f"SELECT * FROM mods WHERE hash = '{file_hash}'")
+            result = self.__cursor.fetchone()
+            if not result:
+                # Create new mod in database
+                self.__cursor.execute(
+                    f"INSERT INTO mods (filename, directory, displayname, hash) VALUES ('{file[1]}', '{file[0]}', '{display_name}', '{file_hash}')")
+            else:
+                # Mod already in database : check if the file location has been updated
+                if result[1] != file[1]:
+                    self.__cursor.execute(f"UPDATE mods SET filename='{file[1]}' WHERE hash='{file_hash}'")
+                if result[2] != file[0]:
+                    self.__cursor.execute(f"UPDATE mods SET directory='{file[0]}' WHERE hash='{file_hash}'")
+
+        # TODO: Check for deleted mod files using MD5 hash
+
+        # Render the updated mod list
 
 application = ModManagerApp()
 application.launch()
